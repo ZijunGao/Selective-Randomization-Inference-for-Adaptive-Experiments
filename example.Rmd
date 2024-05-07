@@ -1,0 +1,272 @@
+---
+title: "Conditional randomization test and enrichment analysis"
+author: 
+  - name: Qingyuan Zhao
+    affiliation: Department of Pure Mathematics and Mathematical Statistics, University of Cambridge
+  - name: Tobias Freidling
+    affiliation: Department of Pure Mathematics and Mathematical Statistics, University of Cambridge
+  - name: Zijun Gao
+    affiliation: Marshall School of Business, University of Southern California, USA
+date: "<small>`r Sys.Date()`</small>" 
+output:
+  html_document:
+    toc: no
+    toc_depth: 3
+    number_sections: yes
+    toc_float:
+      collapsed: no
+    code_folding: show
+    theme: cerulean
+---
+
+```{r helper, echo = FALSE}
+source("helper.R")
+power.plot = function(record, tau.seq, alpha = 0.05, method = NULL, names = NULL, subset.index = NULL, main = "", col = NULL, tau = NULL){
+  if(is.null(method)){method = c("RT", "RT.second.stage", "CRT")}
+  if(is.null(names)){names = method}
+  if(is.null(col)){col = seq(length(method), 1)}
+  if(is.null(subset.index)){subset.index = seq(1, dim(record[[method[1]]])[1])}
+  if(length(subset.index) <= 1){print("There are insufficient observations that meet the specified condition."); return()}
+  par(las=0) 
+  par(mar = c(4.5,5.5,1,1))
+  matplot(tau.seq, matrix(unlist(lapply(record[method], function(x){apply(x[subset.index,] < alpha, 2, mean, na.rm = T)})), nrow = length(tau.seq)),
+          type = "l",
+          col = col,
+          lwd = 3,
+          lty = 1, 
+          main = main, xlab = "treatment effect", ylab = "rejection probability",
+          cex.lab = 1, cex.axis = 1, cex.main = 1)
+  abline(h = alpha, lwd = 3, lty = 3)
+  if(!is.null(tau)){abline(v = tau, lwd = 3, lty = 3)}
+  legend("topright", legend = names, col = col, lwd = 3)  
+}
+
+
+acceptance.rate.plot = function(record, tau.seq, alpha = 0.05, method = NULL, names = NULL, subset.index = NULL, main = "", col = NULL, tau = NULL){
+  if(is.null(method)){method = c("RT", "RT.second.stage", "CRT")}
+  if(is.null(names)){names = method}
+  if(is.null(col)){col = seq(length(method), 1)}
+  if(is.null(subset.index)){subset.index = seq(1, dim(record[[method[1]]])[1])}
+  if(length(subset.index) <= 1){print("There are insufficient observations that meet the specified condition."); return()}
+  par(las=0) 
+  par(mar = c(4.5,5.5,1,1))
+  matplot(tau.seq, matrix(unlist(lapply(record[method], function(x){apply(x[subset.index,], 2, mean, na.rm = T)})), nrow = length(tau.seq)),
+          type = "l",
+          col = col,
+          lwd = 3,
+          lty = 1, 
+          ylim = c(0, 1),
+          main = main, xlab = "treatment effect", ylab = "acceptance rate",
+          cex.lab = 1, cex.axis = 1, cex.main = 1)
+  abline(h = 0.234, lwd = 3, lty = 3) # optimal acceptance rate under certain assumptions
+  legend("topright", legend = names, col = col, lwd = 3)  
+}
+
+MSEJD.plot = function(record, tau.seq, alpha = 0.05, method = NULL, names = NULL, subset.index = NULL, main = "", col = NULL, tau = NULL){
+  if(is.null(method)){method = c("RT", "RT.second.stage", "CRT")}
+  if(is.null(names)){names = method}
+  if(is.null(col)){col = seq(length(method), 1)}
+  if(is.null(subset.index)){subset.index = seq(1, dim(record[[method[1]]])[1])}
+  if(length(subset.index) <= 1){print("There are insufficient observations that meet the specified condition."); return()}
+  par(las=0) 
+  par(mar = c(4.5,5.5,1,1))
+  matplot(tau.seq, matrix(unlist(lapply(record[method], function(x){apply(x[subset.index,], 2, mean, na.rm = T)})), nrow = length(tau.seq)),
+          type = "l",
+          col = col,
+          lwd = 3,
+          lty = 1, 
+          main = main, xlab = "treatment effect", ylab = "MSEJD",
+          cex.lab = 1, cex.axis = 1, cex.main = 1)
+  legend("topright", legend = names, col = col, lwd = 3)  
+}
+
+time.plot = function(record.time, method = NULL, names = NULL, subset.index = NULL, main = "", ylim = NULL){
+  if(is.null(method)){method = names(record.time)}
+  if(is.null(names)){names = method}
+  if(is.null(subset.index)){subset.index = seq(1, length(record.time[[method[1]]]))}
+  data = matrix(unlist(record.time[method]), ncol = length(method))
+  if(is.null(ylim)){ylim = c(min(data), max(data))}
+  colnames(data) = names
+  par(las=2)
+  par(mar = c(4.5,5.5,1,1))
+  boxplot(data[subset.index,], 
+          main = main, 
+          # xlab = "method", 
+          ylab = "time (seconds)",
+          ylim = ylim,
+          cex.lab = 1, cex.axis = 1, cex.main = 1)
+}
+
+CI.plot = function(record, tau, method = NULL, names = NULL, subset.index = NULL, main = ""){
+  if(is.null(method)){method = c("RT", "RT.second.stage", "CRT")}
+  if(is.null(names)){names = method}
+  if(is.null(subset.index)){subset.index = seq(1, dim(record[[method[1]]])[1])}
+  data = matrix(unlist(record[method]), ncol = length(method))
+  colnames(data) = names
+  par(las=2)
+  par(mar = c(4.5,5.5,1,1))
+  boxplot(data[subset.index,], 
+          main = main, 
+          # xlab = "method", 
+          ylab = "CI lower boundary",
+          cex.lab = 1, cex.axis = 1, cex.main = 1)
+  abline(h = tau, lwd = 3, lty = 3, col ="red")
+}
+
+inclusion.function = function(Y, A, X, ...){
+  T0 = SATE(Y = Y[X == 0], A = A[X == 0])
+  T1 = SATE(Y = Y[X == 1], A = A[X == 1])
+  T.inclusion = (T1 - T0) / sqrt(2)
+
+  if(is.na(T.inclusion)){
+    return(T.inclusion)
+  }
+
+  if(T.inclusion > qnorm(0.8, 0, 1)){
+    result = 1
+  }else if(T.inclusion < qnorm(0.2, 0, 1)){
+    result = 2
+  }else{
+    result = 3
+  }
+  
+  return(result)
+}
+
+```
+
+
+Suppose there are two groups of individuals, denoted by $X_{i}$ with values in ${low (0), high (1)}$, and a treatment indicator, denoted by $A_{i}$ with values in ${0,1}$, where the outcome variable is continuous and represented by $Y_{i} \in \mathbb{R}$.
+We recruit participants for the second stage according to the values of $T$---the difference of the standardized SATE (Welch's t-test statistic) between the two groups obtained from the first stage. (The selection statistic $T$ is properly scaled to be asymptotically standard normal under the sharp null with no treatment effect.)
+We use $z_p$ to denote the $100p %$ percentile of standard normal, and adopt the selection rule
+
+* $T > z_{0.8}$: only recruit the subgroup $X = high$;
+* $T < z_{0.2}$: only recruit the subgroup $X = low$;
+* $z_{0.2} \le T \le z_{0.8}$: recruit both subgroups.
+
+The total number of patients in each of the two stages is given by $N_1$ and $N_2$, respectively.
+In both stages, the assignment mechanism follows a completely randomized design, with half of the units receiving treatment, and the other half serving as controls.
+
+
+We compare three ways of doing randomization inference:
+
+* Conditional randomization test (CRT). Remark: if only one subgroup is selected, then we only randomize the first-stage treatments of the selected subgroup. In other words, we condition on the first-stage treatment assignment of the subgroup that is not selected. 
+
+* Randomization test of the second stage (RT.second.stage).
+
+* Randomization test (RT).
+
+As for the implementation of CRT, we are currently using rejection sampling or random-scan, random group, random walk Metropolis-Hastings within Gibbs sampling algorithm.
+For rejection sampling, if the total number of candidate treatment assignments sampled exceeds a prespecified budget, we terminate the rejection sampling and shift to RT.second.stage.
+
+
+# Hypothesis testing
+
+In the default setting, we set $N_1 = 100$, $n_0 = n_1 = 50$, and $N_2 = 40$. 
+There is no treatment effect, and $Y_k(1) = Y_k(0)$ are i.i.d. standard normal. 
+All p-values are computed based on $400$ randomized treatment assignments.
+
+
+## Default
+
+* Unconditional power. CRT is more powerful than RT.second.stage.
+
+* Conditional power. There are roughly $20%$ trials selecting subgroup $X = high$ and subgroup $X = low$, respectively. The rest $60%$ trials selected both subgroups. CRT is more powerful than RT.second.stage when both subgroups are selected. The power curves do not defer much across samplers.
+
+* Computation efficiency. RT and RT.second.stage are the most efficient methods, followed by Gibbs sampling (window.size = 5), then Metropolis-Hastings, with rejection sampling being the slowest.
+
+This simulation comparison seems to suggest that the MCMC sampler strikes a favorable balance between computation time and statistical power.
+
+```{r compare.CRT.samplers, echo = F}
+# takes several minutes for the default setting
+# set.seed(318)
+setting = "default"
+alpha = 0.1
+tau = 0
+tau.seq = seq(-1, 1, by = 0.2)
+N1 = 100; N2 = 40
+m = 40; m.permutation = 400 # m = 400; m.permutation = 400; for the sampler types "MH" or "Gibbs," it is essential for the value of "m.permutation" to be sufficiently large for the Markov chain to reach the stationary distribution.
+count.maX = high00 * m.permutation
+record = list(); record$RT = record$RT.second.stage = record$rejection.sampler = record$MH = matrix(0, nrow = m, ncol = length(tau.seq))
+record.time = lapply(record, function(x){return(rep(0, m))})
+record$inclusion = rep(0, m)
+for(i in 1:m){
+  result = enrichment.design.data.gnr(N1 = N1, N2 = N2, n0 = N1/2, n1 = N1/2, tau = tau, inclusion.function = inclusion.function)
+  record$inclusion[i] = result$inclusion
+  # CRT
+  # rejection sampling
+  start.time = proc.time()
+  record$rejection.sampler[i,] = inference.enrichment.analysis(result = result, m.permutation = m.permutation,
+                                                         tau = tau.seq,
+                                                         method = "CRT",                                                                          sampler = "rejection.sampler",
+                                                         count.max = count.max)
+  end.time = proc.time()
+  record.time$rejection.sampler[i] = end.time[3] - start.time[3]
+  # "rejection.sampler", "MH", "Gibbs"
+
+  # Metropolis-Hastings
+  start.time = proc.time()
+  record$MH[i,] = inference.enrichment.analysis(result = result, m.permutation = m.permutation,
+                                                         tau = tau.seq,
+                                                         method = "CRT",                                                                          sampler = "RWM",
+                                                         count.max = count.max,
+                                                         window.size = 5)
+  end.time = proc.time()
+  record.time$MH[i] = end.time[3] - start.time[3]
+
+  # RT based on the second stage
+  start.time = proc.time()
+  record$RT.second.stage[i,] = inference.enrichment.analysis(result = result,
+                                                                     m.permutation = m.permutation,
+                                                                     tau = tau.seq,
+                                                                     method = "RT.second.stage")
+  end.time = proc.time()
+  record.time$RT.second.stage[i] = end.time[3] - start.time[3]
+
+  # RT based on both stages
+  start.time = proc.time()
+  record$RT[i,] = inference.enrichment.analysis(result = result,
+                                                        m.permutation = m.permutation,
+                                                        tau = tau.seq,
+                                                        method = "RT")
+  end.time = proc.time()
+  record.time$RT[i] = end.time[3] - start.time[3]
+
+  if(i %% 10 == 0){print(i)}
+}
+
+```
+
+
+```{r compare.CRT.samplers.plot, fig.height=8, fig.width = 8, fig.align="center", echo = F} 
+
+method = names(record.time)
+names = c("MH", "RS", "RT 2nd", "RT")
+ylim = c(0, 24)
+par(mfrow = c(2,2))
+time.plot(record.time = record.time, main = paste(setting, "unconditional", sep = ", "), method = method, ylim = ylim, names = names)
+time.plot(record.time = record.time, subset.index = which(record$inclusion == 1), main = paste(setting, "conditional", "subgroup X=high",sep = ", "), method = method, ylim = ylim, names = names)
+time.plot(record.time = record.time, subset.index = which(record$inclusion == 2), main = paste(setting, "conditional", "subgroup X=low", sep = ", "), method = method, ylim = ylim, names = names)
+time.plot(record.time = record.time, subset.index = which(record$inclusion == 3), main = paste(setting, "conditional", "both subgroups", sep = ", "), method = method, ylim = ylim, names = names)
+
+# power plot
+method = names(record)[1 : 4]
+col = c(4, 5, 3, 2, 1)
+par(mfrow = c(2,2))
+power.plot(record = record, tau.seq = tau.seq, alpha = alpha, main = paste(setting, "unconditional", sep = ", "), method = method, names = names, col = col, tau = tau)
+power.plot(record = record, tau.seq = tau.seq, alpha = alpha, subset.index = which(record$inclusion == 1), main = paste(setting, "conditional", "subgroup X=high",sep = ", "), method = method, names = names, col = col, tau = tau)
+power.plot(record = record, tau.seq = tau.seq, alpha = alpha,  subset.index = which(record$inclusion == 2), main = paste(setting, "conditional", "subgroup X=low", sep = ", "), method = method, names = names, col = col, tau = tau)
+power.plot(record = record, tau.seq = tau.seq, alpha = alpha,  subset.index = which(record$inclusion == 3), main = paste(setting, "conditional", "both subgroups", sep = ", "), method = method, names = names, col = col, tau = tau)
+
+# p-value distribution plot
+par(mfrow = c(2, 2))
+boxplot(record$RT, names = tau.seq,
+        xlab = "treatment effect", ylab = "p value", main = "RT")
+boxplot(record$RT.second.stage, names = tau.seq,
+        xlab = "treatment effect", ylab = "p value", main = "RT 2nd")
+boxplot(record$rejection.sampler, names = tau.seq,
+        xlab = "treatment effect", ylab = "p value", main = "RS")
+boxplot(record$MH, names = tau.seq,
+        xlab = "treatment effect", ylab = "p value", main = "MCMC")
+
+```
